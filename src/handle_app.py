@@ -1,6 +1,5 @@
 from pywinauto.application import Application
 from pywinauto.keyboard import send_keys
-from time import sleep
 
 
 CAMPOS = {
@@ -12,6 +11,7 @@ CAMPOS = {
     'alterar_fluxo': 2,
     'grid': 1,
     'linha': 0,
+    'produto': 0,
 }
 
 ATALHOS = {
@@ -78,6 +78,7 @@ def mapear_campos(tab_acesso):
         'combo_parte':   ('TComboBox', 'combo_parte'),
         'consultar':     ('TBitBtn', 'consultar'),
         'alterar_fluxo': ('TBitBtn', 'alterar_fluxo'),
+        'produto':       ('TEdButton', 'produto'),
     }
 
     return {nome: get_field_index(tab_acesso, classe, chave)
@@ -87,28 +88,32 @@ def mapear_campos(tab_acesso):
 def alterar_fluxo(app, fluxo):
     app_dialog = app.window(
         title='Faccao - FacAlteraFluxo - Alteração de Fluxo ',
-        class_name='TfmFacAlteraFluxo'
+        class_name='TfmFacAlteraFluxo',
     )
+    app_dialog.wait('ready', timeout=5)
+
     grid = get_field_index(app_dialog, 'TDBGrid', 'grid')
-    grid.set_focus()
-    sleep(0.2)
+    aguardar(grid).set_focus()
     send_keys('^{HOME}')
-    sleep(0.1)
 
     for _ in range(100):
-        sleep(0.1)
         send_keys('{F2}')
-        sleep(0.1)
+
         editor_ativo = get_field_index(
             grid, 'TDBGridInplaceEdit', 'linha'
         )
-        valor_atual = editor_ativo.window_text()
-        print(valor_atual)
-        sleep(0.1)
-        if valor_atual == fluxo:
+        fluxo_grid = editor_ativo.window_text()
+
+        if fluxo_grid == fluxo:
+            print('Fluxo:', fluxo_grid)
+            print('')
             send_keys(ATALHOS['confirmar'])
             break
 
         send_keys('{DOWN}')
 
+
+def aguardar(campo, timeout=5):
+    campo.wait('ready', timeout=timeout)
+    return campo
 
