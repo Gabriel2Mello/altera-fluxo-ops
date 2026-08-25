@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from pywinauto.application import Application
 from pywinauto.keyboard import send_keys
 
@@ -19,28 +22,74 @@ ATALHOS = {
     'confirmar': '%c',
 }
 
+FLUXOS_TAIL = {
+    '180',
+    '22',
+    '0182',
+    '57',
+    '52',
+    '197',
+    '88',
+    '16',
+    '101',
+    '24',
+    '11',
+    '62',
+    '25',
+    '19',
+    '65',
+    '114',
+    '0116',
+    '53',
+    '17',
+    '73',
+    '09',
+    '13',
+    '03',
+    '82',
+    '181',
+    '54',
+    '100',
+    '108',
+    '26',
+    '136',
+    '37',
+    '67',
+    '64',
+    '116',
+    '20',
+}
+
 
 def get_field_title(parent, class_name, title):
     return parent.child_window(
         class_name=class_name,
-        title=title
+        title=title,
     )
 
 
 def get_field_index(parent, class_name, campo):
     index = CAMPOS.get(campo)
+
     if index is None:
         raise RuntimeError(f'Campo não mapeado: {campo}')
 
     return parent.child_window(
         class_name=class_name,
-        found_index=index
+        found_index=index,
     )
+
+
+def aguardar(campo, timeout=5):
+    campo.wait('ready', timeout=timeout)
+    return campo
 
 
 def inicia_app():
     try:
-        app = Application(backend='win32').connect(
+        app = Application(
+            backend='win32'
+        ).connect(
             title=CAMPOS['sisplan'],
             class_name='TApplication',
             timeout=5
@@ -48,27 +97,28 @@ def inicia_app():
 
         main_window = app.window(
             title=CAMPOS['sisplan'],
-            class_name='TApplication'
+            class_name='TApplication',
         )
         main_window.restore().set_focus()
 
         janela_rel = app.window(
             title_re='.*FacMov3.*',
-            class_name='TfmPrincipal'
+            class_name='TfmPrincipal',
         )
         janela_rel.wait('ready', timeout=5)
 
         tab_acesso = get_field_title(
-            janela_rel, 'TTabSheet', 'Acesso'
+            janela_rel,
+            'TTabSheet',
+            'Acesso',
         )
 
         campos = mapear_campos(tab_acesso)
 
         return app, campos
 
-
     except Exception as e:
-        raise RuntimeError(f'Erro ao conectar no Sisplan: {e}')
+        raise RuntimeError(f'Erro ao conectar no Sisplan: {e}') from e
 
 
 def mapear_campos(tab_acesso):
@@ -81,11 +131,77 @@ def mapear_campos(tab_acesso):
         'produto':       ('TEdButton', 'produto'),
     }
 
-    return {nome: get_field_index(tab_acesso, classe, chave)
-            for nome, (classe, chave) in definicoes.items()}
+    return {
+        nome: get_field_index(
+            tab_acesso,
+            classe,
+            chave,
+        )
+        for nome, (classe, chave) in definicoes.items()
+    }
+
+
+def is_tail(fluxo):
+    fluxo = str(fluxo).strip()
+    return fluxo in FLUXOS_TAIL
+
+
+def desistir(app_dialog):
+    send_keys(ATALHOS['desistir'])
+
+    app_dialog.wait_not('visible', timeout=5)
+
+
+def confirmar(app_dialog):
+    send_keys(ATALHOS['confirmar'])
+
+    app_dialog.wait_not('visible', timeout=5)
+
+
+def carregar_indice_fluxos():
+    global INDICE_FLUXOS, TOTAL_FLUXOS
+
+    with ARQUIVO_FLUXOS.open(
+        'r',
+        encoding='utf-8',
+    ) as arquivo:
+        dados = json.load(arquivo)
+
+    if not isinstance(dados, dict) or not dados:
+        raise RuntimeError('O arquivo fluxos.json está vazio ou inválido.')
+
+    indice = {}
+
+    for fluxo, posicao in dados.items():
+        fluxo = str(fluxo).strip()
+
+        try:
+            posicao = int(posicao)
+        except (TypeError, ValueError) as e:
+            raise RuntimeError(
+                f'Índice inválido para o fluxo {fluxo}: '
+                f'{posicao}'
+            ) from e
+
+        if posicao < 0:
+            raise RuntimeError(
+                f'Índice negativo para o fluxo {fluxo}: '
+                f'{posicao}'
+            )
+
+        indice[fluxo] = posicao
+
+    INDICE_FLUXOS = indice
+    TOTAL_FLUXOS = max(indice.values()) + 1
+
+    print(f'{len(INDICE_FLUXOS)} fluxos carregados do arquivo fluxos.json.')
+
+    return INDICE_FLUXOS
 
 
 def alterar_fluxo(app, fluxo):
+    fluxo = str(fluxo).strip()
+
     app_dialog = app.window(
         title='Faccao - FacAlteraFluxo - Alteração de Fluxo ',
         class_name='TfmFacAlteraFluxo',
@@ -94,26 +210,54 @@ def alterar_fluxo(app, fluxo):
 
     grid = get_field_index(app_dialog, 'TDBGrid', 'grid')
     aguardar(grid).set_focus()
-    send_keys('^{HOME}')
+
+    if is_tail(fluxo):
+        send_keys('^{END}')
+        movimento = '{UP}'
+    else:
+        send_keys('^{HOME}')
+        movimento = '{DOWN}'
+
+    fluxo_anterior = None
 
     for _ in range(100):
         send_keys('{F2}')
 
         editor_ativo = get_field_index(
-            grid, 'TDBGridInplaceEdit', 'linha'
+            grid,
+            'TDBGridInplaceEdit',
+            'linha',
         )
-        fluxo_grid = editor_ativo.window_text()
+        aguardar(editor_ativo)
+
+        fluxo_grid = editor_ativo.window_text().strip()
+
+        if fluxo_grid == '':
+            print('Grid vazio. Ignorado...')
+            print()
+
+            desistir(app_dialog)
+            return False
 
         if fluxo_grid == fluxo:
             print('Fluxo:', fluxo_grid)
-            print('')
-            send_keys(ATALHOS['confirmar'])
-            break
+            print()
 
-        send_keys('{DOWN}')
+            confirmar(app_dialog)
+            return True
 
+        if fluxo_grid == fluxo_anterior:
+            print(f'Fluxo não encontrado: {fluxo}')
+            print()
 
-def aguardar(campo, timeout=5):
-    campo.wait('ready', timeout=timeout)
-    return campo
+            desistir(app_dialog)
+            return False
+
+        fluxo_anterior = fluxo_grid
+        send_keys(movimento)
+
+    print('Limite de busca atingido.')
+
+    desistir(app_dialog)
+    return False
 
