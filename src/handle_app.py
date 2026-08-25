@@ -158,47 +158,6 @@ def confirmar(app_dialog):
     app_dialog.wait_not('visible', timeout=5)
 
 
-def carregar_indice_fluxos():
-    global INDICE_FLUXOS, TOTAL_FLUXOS
-
-    with ARQUIVO_FLUXOS.open(
-        'r',
-        encoding='utf-8',
-    ) as arquivo:
-        dados = json.load(arquivo)
-
-    if not isinstance(dados, dict) or not dados:
-        raise RuntimeError('O arquivo fluxos.json está vazio ou inválido.')
-
-    indice = {}
-
-    for fluxo, posicao in dados.items():
-        fluxo = str(fluxo).strip()
-
-        try:
-            posicao = int(posicao)
-        except (TypeError, ValueError) as e:
-            raise RuntimeError(
-                f'Índice inválido para o fluxo {fluxo}: '
-                f'{posicao}'
-            ) from e
-
-        if posicao < 0:
-            raise RuntimeError(
-                f'Índice negativo para o fluxo {fluxo}: '
-                f'{posicao}'
-            )
-
-        indice[fluxo] = posicao
-
-    INDICE_FLUXOS = indice
-    TOTAL_FLUXOS = max(indice.values()) + 1
-
-    print(f'{len(INDICE_FLUXOS)} fluxos carregados do arquivo fluxos.json.')
-
-    return INDICE_FLUXOS
-
-
 def alterar_fluxo(app, fluxo):
     fluxo = str(fluxo).strip()
 
