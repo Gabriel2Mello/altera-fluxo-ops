@@ -65,5 +65,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    from integracao_hub import executar_console
+    raise SystemExit(executar_console('alteracao-fluxo', 'Alteração de Fluxo', main))
 
