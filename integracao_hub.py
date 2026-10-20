@@ -143,14 +143,16 @@ def trava_ocupada(caminho: Path) -> bool:
     return False
 
 
-def _pedido(registro: Registro, encerrar: bool = False) -> Registro:
+def _pedido(registro: Registro, encerrar: bool = False, *, cancelar_abertura: bool = False) -> Registro:
     url = texto(registro.get('url'))
     if not url_local(url):
         raise ValueError('Endereço local inválido.')
-    pedido = Request(url.rstrip('/') + ('/nunes/encerrar' if encerrar else '/nunes/health'),
-                     data=b'{}' if encerrar else None,
+    parada = encerrar or cancelar_abertura
+    rota = '/nunes/cancelar-abertura' if cancelar_abertura else '/nunes/encerrar' if encerrar else '/nunes/health'
+    pedido = Request(url.rstrip('/') + rota,
+                     data=b'{}' if parada else None,
                      headers={'X-Nunes-Instancia': texto(registro.get('token')), 'Content-Type': 'application/json'},
-                     method='POST' if encerrar else 'GET')
+                     method='POST' if parada else 'GET')
     # O tráfego de controle local nunca utiliza proxy configurado na estação.
     with build_opener(ProxyHandler({})).open(pedido, timeout=.6) as resposta:
         dados: object = json.loads(resposta.read(8192))
@@ -174,6 +176,10 @@ def solicitar_encerramento(registro: Registro) -> None:
     _ = _pedido(registro, encerrar=True)
 
 
+def solicitar_cancelamento_abertura(registro: Registro) -> None:
+    _ = _pedido(registro, cancelar_abertura=True)
+
+
 class IntegracaoLocal:
     def __init__(self, identificador: str, nome: str, sisplan: bool,
                  pasta: Path | None = None, *, sem_navegador: bool = False):
@@ -185,7 +191,7 @@ class IntegracaoLocal:
         self.registro: Registro = {'protocolo': 1, 'id': identificador, 'nome': nome, 'sisplan': sisplan,
                                   'instancia': uuid.uuid4().hex, 'token': secrets.token_urlsafe(32),
                                   'pid': os.getpid(), 'url': '', 'estado': 'iniciando', 'paginas': 0,
-                                  'iniciado': time.time()}
+                                  'iniciado': time.time(), 'abertura': os.environ.get('NUNES_HUB_ABERTURA', '')}
         self.sem_navegador = sem_navegador
         self.travas: list[TravaLocal] = []
         self.mutex = Lock()
@@ -252,9 +258,13 @@ class IntegracaoLocal:
             if not webbrowser.open(texto(self.registro['url']), new=2):
                 raise RuntimeError('Não foi possível abrir o navegador. Reabra a ferramenta pelo hub.')
 
-    def solicitar_parada(self) -> None:
+    def solicitar_parada(self, *, somente_sem_paginas: bool = False) -> None:
         if self.encerrar is None:
             raise ValueError('Esta execução não possui servidor web.')
+        if somente_sem_paginas:
+            situacao = self.situacao()
+            if situacao.get('paginas') != 0 or situacao.get('ocupado'):
+                return
         with self.mutex:
             self.registro.update(estado='encerrando', encerrando=True)
         self.atualizar()
@@ -300,7 +310,7 @@ class IntegracaoLocal:
 
 
 def atender_integracao(handler: BaseHTTPRequestHandler) -> bool:
-    if handler.path not in ('/nunes/health', '/nunes/encerrar'):
+    if handler.path not in ('/nunes/health', '/nunes/encerrar', '/nunes/cancelar-abertura'):
         return False
     integracao = getattr(handler.server, 'integracao_nunes', None)
     codigo, resposta = 403, {'erro': 'Acesso não autorizado.'}
@@ -310,7 +320,7 @@ def atender_integracao(handler: BaseHTTPRequestHandler) -> bool:
             and handler.headers.get('Origin') is None):
         if handler.command == 'GET' and handler.path == '/nunes/health':
             codigo = 200
-        elif handler.command == 'POST' and handler.path == '/nunes/encerrar':
+        elif handler.command == 'POST' and handler.path in ('/nunes/encerrar', '/nunes/cancelar-abertura'):
             tamanho = handler.headers.get('Content-Length', '')
             if tamanho != '2' or handler.headers.get('Content-Type') != 'application/json':
                 codigo = 400
@@ -318,7 +328,9 @@ def atender_integracao(handler: BaseHTTPRequestHandler) -> bool:
                 _ = handler.rfile.read(2)
                 try:
                     # A callback somente solicita a parada; nunca mata o processo.
-                    Thread(target=integracao.solicitar_parada, daemon=True).start()
+                    Thread(target=integracao.solicitar_parada,
+                           kwargs={'somente_sem_paginas': handler.path == '/nunes/cancelar-abertura'},
+                           daemon=True).start()
                     codigo = 200
                 except ValueError:
                     codigo = 409
