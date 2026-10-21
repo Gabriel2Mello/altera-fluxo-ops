@@ -1,0 +1,8 @@
+pywinauto==0.6.9
+pg8000==1.31.5
+six==1.17.0
+comtypes==1.4.17
+pywin32==312
+python-dateutil==2.9.0.post0
+scramp==1.4.17
+asn1crypto==1.5.1

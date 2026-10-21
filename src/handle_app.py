@@ -196,21 +196,21 @@ def alterar_fluxo(app, fluxo):
             print()
 
             desistir(app_dialog)
-            return False
+            return 'grid_vazio'
 
         if fluxo_grid == fluxo:
             print('Fluxo:', fluxo_grid)
             print()
 
             confirmar(app_dialog)
-            return True
+            return 'enviado'
 
         if fluxo_grid == fluxo_anterior:
             print(f'Fluxo não encontrado: {fluxo}')
             print()
 
             desistir(app_dialog)
-            return False
+            return 'fluxo_nao_encontrado'
 
         fluxo_anterior = fluxo_grid
         send_keys(movimento)
@@ -218,5 +218,5 @@ def alterar_fluxo(app, fluxo):
     print('Limite de busca atingido.')
 
     desistir(app_dialog)
-    return False
+    return 'limite_busca'
 

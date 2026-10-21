@@ -1,70 +1,57 @@
-from src.handle_app import inicia_app, alterar_fluxo, aguardar
-from time import perf_counter
+"""Alteração com confirmação no banco e recuperação durável por OP/parte."""
+import argparse
+import json
 from pathlib import Path
-from os import getcwd
+from time import perf_counter
+
+from src.banco import BancoFluxo
+from src.diario import DiarioFluxo
+from src.servico_fluxo import executar, conferir
 
 
-def carregar_ordens():
-    caminho_ops = Path.cwd() / 'ordem_producao.txt'
-
-    if not caminho_ops.exists():
-        raise RuntimeError('Arquivo ordem_producao.txt não encontrado.')
-
-    ordens = caminho_ops.read_text(encoding='utf-8').split()
-
+def carregar_ordens(caminho=None):
+    caminho = Path(caminho) if caminho is not None else Path(__file__).resolve().parent / 'ordem_producao.txt'
     try:
-        return sorted(ordens, key=int)
-    except ValueError as e:
-        raise RuntimeError(
-            f'Erro ao ler arquivo ordem_producao.txt: {e}'
-        ) from e
+        ordens = caminho.read_text(encoding='utf-8').split()
+    except OSError as erro:
+        raise RuntimeError('Não foi possível ler ordem_producao.txt.') from erro
+    if not ordens or any(not n.isascii() or not n.isdigit() or not 1 <= len(n) <= 12 or int(n) <= 0 for n in ordens):
+        raise ValueError('Informe OPs numéricas positivas com até 12 dígitos.')
+    return sorted({n.zfill(6) for n in ordens}, key=int)
 
 
-def main():
-    start_time = perf_counter()
-
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    grupo = parser.add_mutually_exclusive_group()
+    grupo.add_argument('--historico', action='store_true', help='Consultar etapas locais, sem acessar banco ou Sisplan')
+    grupo.add_argument('--conferir', action='store_true', help='Conferir incertezas no banco, sem repetir ações na interface')
+    grupo.add_argument('--novo-lote', action='store_true', help='Nova solicitação explícita, incluindo OPs concluídas/ignoradas; incertezas permanecem bloqueadas')
+    args = parser.parse_args(argv)
+    inicio = perf_counter()
     try:
-        lista_ops = carregar_ordens()
-        app, campos = inicia_app()
-
-        for op in lista_ops:
-            print('Número:', op)
-
-            campo_numero = aguardar(campos['numero'])
-            campo_numero.set_text(op)
-            campo_numero.type_keys('{ENTER}')
-
-            produto = aguardar(campos['produto']).window_text()
-
-            print('Produto:', produto)
-
-            combo_parte = aguardar(campos['combo_parte'])
-            combo_parte.set_focus()
-            combo_parte.select(1)
-
-            aguardar(campos['consultar']).type_keys('{ENTER}')
-
-            fluxo = campos['fluxo'].window_text().strip()
-            if fluxo in ('70', '19', '49'):
-                print(f'Fluxo {fluxo} ignorado...')
-                print()
-                continue
-
-            aguardar(campos['alterar_fluxo']).type_keys('{ENTER}')
-
-            alterar_fluxo(app, fluxo)
-
-    except Exception as e:
-        raise RuntimeError(f'Erro: {e}') from e
-
+        diario = DiarioFluxo()
+        if args.historico:
+            print(json.dumps(diario.listar(), ensure_ascii=False, indent=2))
+            return 0
+        banco = BancoFluxo()
+        if args.conferir:
+            return 0 if conferir(diario, banco) else 1
+        itens = diario.planejar(carregar_ordens(), '00', novo=args.novo_lote)
+        if not itens:
+            print('As OPs já estão concluídas ou ignoradas no histórico. Nenhuma ação enviada.')
+            return 0
+        from src.sisplan import SisplanFluxo
+        executar(itens, diario, banco, SisplanFluxo())
+        return 0
+    except Exception as erro:
+        print(f'ERRO: {erro}')
+        return 1
     finally:
-        elapsed_time = perf_counter() - start_time
-
-        print(f'Terminado em: {elapsed_time:0.2f} segundos')
-        input('Pressione Enter para fechar...')
+        print(f'Terminado em {perf_counter() - inicio:0.2f} segundos')
+        if not (args.historico or args.conferir):
+            input('Pressione Enter para fechar...')
 
 
 if __name__ == '__main__':
     from integracao_hub import executar_console
     raise SystemExit(executar_console('alteracao-fluxo', 'Alteração de Fluxo', main))
-
