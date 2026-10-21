@@ -2,12 +2,14 @@
 import json
 
 from src.banco import ConfirmacaoError
+from src.metricas import publicar_metricas
 
 FLUXOS_IGNORADOS = ('70', '19', '49')
 RECUSAS = ('grid_vazio', 'fluxo_nao_encontrado', 'limite_busca')
 
 
 def executar(itens, diario, banco, sisplan, informar=print):
+    publicar_metricas(diario, informar)
     for item in itens:
         antes = banco.preparar(item['numero'], item['parte'])
         if antes['fluxo'] in FLUXOS_IGNORADOS:
@@ -27,13 +29,15 @@ def executar(itens, diario, banco, sisplan, informar=print):
                 raise ConfirmacaoError('Resultado desconhecido da interface; não repetir.')
             banco.confirmar(antes)
             diario.atualizar(item, 'concluido', motivo='Fluxo, setores e marcador de alteração conferidos no banco.')
-            informar(f"OP {item['numero']}: alteração confirmada no banco.")
         except BaseException:
             diario.atualizar(item, 'incerto', motivo='Envio sem confirmação durável. Conferir no banco antes de continuar.')
             raise
+        publicar_metricas(diario, informar, identificador=item['id'])
+        informar(f"OP {item['numero']}: alteração confirmada no banco.")
 
 
 def conferir(diario, banco, informar=print):
+    publicar_metricas(diario, informar)
     falhas = []
     for item in diario.listar():
         if item['situacao'] not in ('envio_iniciado', 'incerto'):
@@ -42,8 +46,10 @@ def conferir(diario, banco, informar=print):
             antes = json.loads(item['contexto'])
             banco.confirmar(antes)
             diario.atualizar(item, 'concluido', motivo='Confirmado no banco por conferência explícita após interrupção.')
-            informar(f"OP {item['numero']}: confirmada no banco; nenhuma ação enviada ao Sisplan.")
         except (ConfirmacaoError, ValueError, KeyError, TypeError):
             falhas.append(item['numero'])
             informar(f"OP {item['numero']}: continua incerta. Verifique com o responsável; não repetir.")
+            continue
+        publicar_metricas(diario, informar, identificador=item['id'])
+        informar(f"OP {item['numero']}: confirmada no banco; nenhuma ação enviada ao Sisplan.")
     return not falhas

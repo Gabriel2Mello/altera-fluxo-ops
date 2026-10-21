@@ -6,7 +6,7 @@ from time import perf_counter
 
 from src.banco import BancoFluxo
 from src.diario import DiarioFluxo
-from src.servico_fluxo import executar, conferir
+from src.servico_fluxo import executar, conferir, publicar_metricas
 
 
 def carregar_ordens(caminho=None):
@@ -33,6 +33,7 @@ def main(argv=None):
         if args.historico:
             print(json.dumps(diario.listar(), ensure_ascii=False, indent=2))
             return 0
+        publicar_metricas(diario)
         banco = BancoFluxo()
         if args.conferir:
             return 0 if conferir(diario, banco) else 1

@@ -108,6 +108,80 @@ tela aparenta sucesso. Uma alteração concorrente de outro operador não permit
 atribuir autoria só pelo marcador. O critério confirma o estado observado do
 fluxo/setores; não atesta previsões ou demais regras da produção. A seleção da
 parte, os tipos de colunas, permissões e o resultado real ainda precisam de
-homologação acompanhada. Não há métrica nova nesta entrega; isso pertence à E11.
+homologação acompanhada. A E11 acrescentou as métricas descritas abaixo, preservando esse critério de confirmação.
 Diário anterior à implantação, restauração de backup e queda de energia real
 não foram homologados. Executáveis antigos precisam de reconstrução.
+
+
+## Métricas de alterações confirmadas — E11, 21/10/2026
+
+O responsável aprovou **uma contagem por OP/parte em cada nova solicitação
+confirmada no banco**. O Hub mostra **Alterações de fluxo confirmadas**, com
+filtro de automação/empresa, evolução, histórico e CSV. O Fluxo continua console;
+essa integração não acrescenta iniciador web no Hub.
+
+O ID persistente da solicitação e a empresa FILIAL identificam a entrega.
+Conferir a mesma solicitação, reiniciar ou repetir a publicação da estatística
+não conta novamente. `--novo-lote` cria outra solicitação: se a nova alteração
+for confirmada, soma mais 1, mesmo sendo a mesma OP/parte/fluxo. O total não é
+uma contagem de OPs distintas. Ignoradas, recusadas e incertas não contam.
+
+A métrica nasce somente depois da confirmação E9 de identidade, fluxo, setores
+e avanço do marcador no banco. Guarda OP, parte, lote e empresa FILIAL, sem
+credenciais, produto ou fotografia completa do banco. O horário é o da
+**conclusão local confirmada**, em UTC; o painel apresenta os dias em UTC−03.
+Uma incerteza resolvida por `--conferir` é datada pela confirmação atual, sem
+inventar a hora do efeito anterior.
+
+### Fila durável e recuperação
+
+A primeira abertura desta versão migra o diário local da versão 1 para a 2
+numa transação aditiva, preservando IDs, etapas, contexto, motivos e horários.
+Acrescenta a tabela `metricas_fluxo`; **conclusões antigas não são importadas**.
+Uma OP anteriormente incerta que só agora for confirmada gera a métrica atual.
+Versões desconhecidas ou dados inválidos são recusados, sem apagar o diário.
+Nenhum diário operacional real foi aberto/migrado durante os testes.
+
+Concluir a OP e criar sua pendência de métrica acontecem na mesma transação
+SQLite. Se essa gravação falhar depois do efeito, a OP continua incerta e exige
+conferência, conforme a E9. A entrega ao banco/fila comum de métricas ocorre
+depois desse commit e mantém o instante original. A marca de entrega só é
+salva após o aceite; cair entre aceite e marca permite reenviar a estatística
+com o mesmo ID, sem aumentar o total nem enviar outra ação ao Sisplan.
+
+Execução normal e `--conferir` tentam publicar pendências do diário, inclusive
+quando não há OP nova. `--historico` não publica métricas nem consulta o ERP;
+ele abre o diário local, incluindo a migração de versão quando necessária.
+Nenhuma recuperação de estatística repete a alteração de fluxo.
+
+Se a estatística falhar, o console avisa e conserva a pendência no diário; uma
+OP já concluída continua concluída. Não use `--novo-lote` para recuperar uma
+métrica. Reabrir normalmente ou usar `--conferir` pode repetir apenas sua
+publicação; este último também consulta o banco para as OPs ainda incertas.
+Se houver pendência somente no diário, o Hub ainda não conhece esse evento:
+seu relatório pode ficar incompleto até a próxima publicação. Preserve tanto
+o diário como a pasta comum de métricas, incluindo `recuperar/`.
+
+Não há transação conjunta com o Sisplan, prova de autoria de alterações
+concorrentes ou reconstrução automática de estatísticas apagadas. O critério
+real de confirmação E9 continua exigindo homologação. Para voltar código,
+o diário v2 exige versão compatível: a E10 agora registra essa geração e recusa
+rollback incompatível, sem converter ou restaurar o diário ao passado.
+
+### Atualização e validação
+
+`metricas_nunes.py` tem fonte no Hub e cópia nesta ferramenta, como nas outras
+cinco automações. **Encerre normalmente e reabra Hub e as seis ferramentas com
+métricas** para carregar os novos indicadores. Leitores antigos consideram o
+evento desconhecido; não apague base/fila para liberar o painel. Executáveis
+antigos precisam ser reconstruídos. Nenhuma dependência foi adicionada.
+
+Passaram **34 testes Python do Fluxo** (14 novos), incluindo nova solicitação,
+reconciliação sem reenvio, falha antes/depois do aceite, data original,
+transação da conclusão/fila e migração sem importar histórico antigo. Dois
+ensaios entre processos terminaram abruptamente e recuperaram exatamente uma
+métrica, sem novo envio. No conjunto dos sete projetos passaram **816 Python
+e 53 JavaScript**, tipagem estrita do Financeiro e contratos por SHA-256.
+Prévia Edge claro/escuro a 360/1200 px aprovada para Find/Move e Fluxo. Somente
+dados sintéticos; sem banco/Sisplan reais, impressão ou movimentação fiscal.
+Evidências locais: `nunes-hub/.local/e11-fluxo-2026-10-21/`.

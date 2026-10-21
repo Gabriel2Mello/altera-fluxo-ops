@@ -1,4 +1,4 @@
-"""Etapas por OP/parte, antes e depois do efeito; dados locais do usuário."""
+"""Etapas por OP/parte e fila de métricas atômica com a conclusão local."""
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
@@ -27,12 +27,22 @@ class DiarioFluxo:
                     ('pendente','envio_iniciado','concluido','ignorado','incerto')),
                     contexto TEXT NOT NULL, motivo TEXT NOT NULL, atualizado_em TEXT NOT NULL,
                     UNIQUE(execucao,numero,parte))""")
-                banco.execute('PRAGMA user_version=1')
-            elif versao != 1:
+                versao = 1
+            elif versao not in (1, 2):
                 raise RuntimeError('Versão desconhecida do diário de Fluxo. Preserve o arquivo.')
+            if versao == 1:
+                # Migração aditiva e transacional. Conclusões E9 não são importadas.
+                banco.execute('CREATE TABLE metricas_fluxo ('
+                              'id TEXT PRIMARY KEY REFERENCES ordens(id), ocorrido_em TEXT NOT NULL, '
+                              'entregue INTEGER NOT NULL DEFAULT 0 CHECK(entregue IN (0,1)))')
+                banco.execute('PRAGMA user_version=2')
             if banco.execute("SELECT 1 FROM ordens WHERE situacao NOT IN "
                              "('pendente','envio_iniciado','concluido','ignorado','incerto') LIMIT 1").fetchone():
                 raise RuntimeError('Diário de Fluxo inválido. Preserve o arquivo.')
+            if banco.execute("SELECT 1 FROM metricas_fluxo m LEFT JOIN ordens o ON o.id=m.id "
+                             "WHERE o.id IS NULL OR o.situacao<>'concluido' OR m.entregue NOT IN (0,1) "
+                             "OR m.ocorrido_em IS NULL LIMIT 1").fetchone():
+                raise RuntimeError('Fila de métricas do Fluxo inválida. Preserve o diário.')
 
     @contextmanager
     def conectar(self):
@@ -41,6 +51,7 @@ class DiarioFluxo:
             banco = sqlite3.connect(self.caminho, timeout=5)
             banco.row_factory = sqlite3.Row
             banco.execute('PRAGMA synchronous=FULL')
+            banco.execute('PRAGMA foreign_keys=ON')
             with banco:
                 banco.execute('BEGIN IMMEDIATE')
                 yield banco
@@ -79,6 +90,20 @@ class DiarioFluxo:
             anterior = banco.execute('SELECT situacao FROM ordens WHERE id=?', (item['id'],)).fetchone()
             if anterior is None or anterior[0] not in origens[situacao]:
                 raise RuntimeError('Transição inválida no diário de Fluxo. Execução interrompida.')
+            instante = datetime.now(timezone.utc).isoformat()
             banco.execute('UPDATE ordens SET situacao=?, contexto=COALESCE(?,contexto), motivo=?, atualizado_em=? WHERE id=?',
                           (situacao, json.dumps(contexto, ensure_ascii=False) if contexto is not None else None,
-                           motivo, datetime.now(timezone.utc).isoformat(), item['id']))
+                           motivo, instante, item['id']))
+            if situacao == 'concluido':
+                banco.execute('INSERT INTO metricas_fluxo (id, ocorrido_em) VALUES (?,?)', (item['id'], instante))
+
+    def metricas_pendentes(self, identificador=None):
+        with self.conectar() as banco:
+            return [dict(linha) for linha in banco.execute(
+                'SELECT o.id,o.execucao,o.numero,o.parte,m.ocorrido_em FROM metricas_fluxo m '
+                'JOIN ordens o ON o.id=m.id WHERE m.entregue=0 AND (? IS NULL OR m.id=?) ORDER BY o.rowid',
+                (identificador, identificador))]
+
+    def marcar_metrica(self, identificador):
+        with self.conectar() as banco:
+            banco.execute('UPDATE metricas_fluxo SET entregue=1 WHERE id=?', (identificador,))
