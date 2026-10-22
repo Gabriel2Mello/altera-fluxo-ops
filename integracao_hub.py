@@ -4,7 +4,8 @@ Somente biblioteca padrão. Não controla telas, credenciais ou operações de n
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 from datetime import datetime, timezone
@@ -16,17 +17,110 @@ import os
 from pathlib import Path
 import secrets
 import sys
-from threading import Event, Lock, Thread
+from threading import Event, Lock, RLock, Thread
 import time
 import traceback
 from types import TracebackType
-from typing import cast
+from typing import TextIO, cast
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler
 import uuid
 import webbrowser
 
 Registro = dict[str, object]
+_TRAVA_LOG_ABERTURA = RLock()
+
+
+class MedidorAbertura:
+    """Etapas locais, sem dados de negócio ou dependência do logger da aplicação."""
+
+    def __init__(self, identificador: str, pasta: Path | None = None):
+        if not identificador or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for c in identificador):
+            raise ValueError('Identificador de aplicação inválido.')
+        self.identificador = identificador
+        self.pasta = pasta if pasta is not None else dados_compartilhados()
+        self.inicio = time.monotonic()
+        self.tentativa = uuid.uuid4().hex[:12]
+        self.caminho_log = self.pasta / 'logs' / (identificador + '-abertura.log')
+        self._arquivo: TextIO | None = None
+        self._manter_aberto = False
+
+    def __enter__(self) -> MedidorAbertura:
+        self._manter_aberto = True
+        return self
+
+    def __exit__(self, tipo: type[BaseException] | None, erro: BaseException | None,
+                 pilha: TracebackType | None) -> None:
+        self.fechar()
+
+    def fechar(self) -> None:
+        with _TRAVA_LOG_ABERTURA:
+            self._manter_aberto = False
+            if self._arquivo is not None:
+                try:
+                    self._arquivo.close()
+                except OSError:
+                    pass
+                self._arquivo = None
+
+    def marcar(self, etapa: str) -> None:
+        self._registrar(etapa, 'marco', time.monotonic())
+
+    @contextmanager
+    def etapa(self, etapa: str) -> Generator[None, None, None]:
+        desde = time.monotonic()
+        self._registrar(etapa, 'iniciada', desde)
+        try:
+            yield
+        except BaseException as erro:
+            self._registrar(etapa, 'falhou', desde, erro=erro)
+            raise
+        else:
+            self._registrar(etapa, 'concluida', desde)
+
+    def _registrar(self, etapa: str, situacao: str, desde: float,
+                   *, erro: BaseException | None = None) -> None:
+        if (not etapa or len(etapa) > 80
+                or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789_' for c in etapa)):
+            raise ValueError('Etapa de abertura inválida.')
+        agora = time.monotonic()
+        linha: Registro = {'instante': datetime.now(timezone.utc).isoformat(),
+                           'aplicacao': self.identificador, 'tentativa': self.tentativa,
+                           'pid': os.getpid(), 'etapa': etapa, 'situacao': situacao,
+                           'decorrido_ms': round((agora - self.inicio) * 1000, 3)}
+        if situacao in ('concluida', 'falhou'):
+            linha['duracao_ms'] = round((agora - desde) * 1000, 3)
+        if erro is not None:
+            linha['erro'] = type(erro).__name__
+        try:
+            with _TRAVA_LOG_ABERTURA:
+                try:
+                    if self._arquivo is None:
+                        self.caminho_log.parent.mkdir(parents=True, exist_ok=True)
+                        self._arquivo = self.caminho_log.open('a', encoding='utf-8')
+                    if self._arquivo.tell() >= 1024 * 1024:
+                        self._arquivo.close()
+                        self._arquivo = None
+                        self.caminho_log.replace(self.caminho_log.with_suffix('.log.1'))
+                        self._arquivo = self.caminho_log.open('a', encoding='utf-8')
+                    _ = self._arquivo.write(json.dumps(linha, ensure_ascii=False) + '\n')
+                    # Cada etapa fica visível antes de continuar, inclusive se
+                    # a seguinte travar. Reusar o arquivo não acumula linhas em memória.
+                    self._arquivo.flush()
+                except OSError:
+                    if self._arquivo is not None:
+                        try:
+                            self._arquivo.close()
+                        except OSError:
+                            pass
+                        self._arquivo = None
+                    raise
+                finally:
+                    if not self._manter_aberto:
+                        self.fechar()
+        except OSError:
+            # Não trocar uma falha original nem impedir a aplicação por causa do log.
+            pass
 
 
 def texto(valor: object) -> str:

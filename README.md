@@ -24,6 +24,14 @@ automação. A escolha do primeiro item útil do combo é preservada, mas seu c�
 exibido deve corresponder à parte 00. OP, produto e fluxo exibidos devem coincidir
 com o banco antes de abrir a alteração; divergência interrompe antes do envio.
 
+## Diagnóstico de inicialização
+
+O console registra as etapas efetivamente executadas em
+`logs/alteracao-fluxo-abertura.log`, na pasta de presença da sessão Nunes.
+O ensaio de tempo usou somente `--historico` com diário temporário, sem
+conectar ao Sisplan; não é uma homologação do tempo de execução normal.
+Resultados, etapas e limites: [Tempos por etapa](../nunes-hub/TEMPOS_ABERTURA.md).
+
 ## Banco e critério de conclusão — E9, 21/10/2026
 
 Usa o arquivo compartilhado `../estrutura-nunes/area-nunes/privado/banco-sisplan.json`,
@@ -168,7 +176,63 @@ real de confirmação E9 continua exigindo homologação. Para voltar código,
 o diário v2 exige versão compatível: a E10 agora registra essa geração e recusa
 rollback incompatível, sem converter ou restaurar o diário ao passado.
 
-### Atualização e validação
+## Sincronização com a central local
+
+Execução normal e `main.py --conferir` enviam à central os eventos locais
+`fluxo_alterado` já publicados no banco/fila comum de métricas. A publicação
+durável do diário continua igual: só confirmações geram eventos, conservando
+solicitação, OP/parte, lote, empresa e instante original. Reenviar ou conferir
+a mesma solicitação não duplica; outra solicitação confirmada pode somar mais 1.
+
+`main.py --historico` não inicia o sincronizador nem consulta a central.
+Uma pendência ainda retida somente no diário depende de sua publicação na
+execução normal ou em `--conferir`; este último também consulta o banco para
+resolver incertezas. Não use `--novo-lote` para recuperar estatísticas.
+
+Com a central já preparada, execute uma vez na pasta `nunes-estatisticas`:
+
+```powershell
+.\.venv\Scripts\python.exe central.py vincular --automacao '..\altera-fluxo-ops'
+```
+
+O vínculo privado fica em `.local/central.json`; um arquivo existente não é
+sobrescrito. Reinicie a central atualizada e reabra o Hub. O Fluxo carrega
+o cliente na próxima execução de console. Não recrie bases ou identidades.
+Sem vínculo, o comportamento anterior é preservado e não há envios à central.
+
+O sincronizador tenta na abertura, a cada cinco segundos e ao encerrar,
+aguardando até 2,5 segundos no fechamento. Sem confirmação válida, mantém
+pendências para outra execução. Confirmações ficam em
+`sincronizacao-alteracao-fluxo.sqlite3` na pasta das métricas, vinculadas à
+identidade da central e à assinatura do evento. Os registros locais permanecem.
+
+Para consultar ou enviar eventos já publicados sem executar o fluxo ou o ERP:
+
+```powershell
+.\.venv\Scripts\python.exe sincronizar_estatisticas.py --aplicacao alteracao-fluxo --resumo
+.\.venv\Scripts\python.exe sincronizar_estatisticas.py --aplicacao alteracao-fluxo
+```
+
+No Hub, **Resultados → Central local → Atualiza Fluxo** mostra o total e as
+pendências das métricas comuns. Filtros do histórico local não se aplicam ao
+total central. O Fluxo continua console, sem iniciador web novo. O cliente
+funciona sem importar repositórios irmãos. Executáveis antigos precisam ser
+reconstruídos com os dois módulos de estatísticas e `metricas_nunes.py`.
+Protocolo e recuperação no [contrato da central](../nunes-estatisticas/CONTRATO.md).
+
+### Validação da integração central — 22/10/2026
+
+Passaram 44 testes Python do Fluxo, incluindo dez novos testes da central.
+O conjunto dos oito projetos envolvidos passou 970 Python e 83 JavaScript;
+tipagem completa do Financeiro sem erros ou avisos e contratos iguais por
+SHA-256. Os testes do Fluxo usam central em outro processo, diário/métricas
+temporários e banco/Sisplan simulados. Cobrem retorno da central, reinícios,
+resposta perdida após commit, pendência do diário, nova solicitação e
+reconciliação sem repetir efeitos. Não houve alteração de OP real. O vínculo
+privado foi criado após os testes; homologação operacional pendente após
+reiniciar a central e reabrir o Hub.
+
+## Atualização e validação da E11
 
 `metricas_nunes.py` tem fonte no Hub e cópia nesta ferramenta, como nas outras
 cinco automações. **Encerre normalmente e reabra Hub e as seis ferramentas com
