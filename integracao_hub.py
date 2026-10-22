@@ -239,12 +239,42 @@ class IntegracaoLocal:
             gravar_registro(self.caminho, self.registro)
 
     def _presenca(self) -> None:
-        while not self.parar.wait(1):
+        intervalo = 1
+        falhas = 0
+        diagnostico: list[str] | None = None
+        registrado = False
+        while not self.parar.wait(intervalo):
             try:
                 self.atualizar()
+            except OSError as erro:
+                falhas += 1
+                if diagnostico is None:
+                    # Conserva somente texto sanitizado, sem reter exceção/frames em memória.
+                    diagnostico = self._diagnostico_falha(erro)
+                if not registrado:
+                    try:
+                        self._gravar_diagnostico(diagnostico)
+                    except OSError:
+                        registrado = False  # O diagnóstico permanece pendente para a recuperação.
+                    else:
+                        registrado = True
+                intervalo = min(intervalo * 2, 30)
             except Exception as erro:
                 self.registrar_falha(erro, fatal=False)
                 return
+            else:
+                intervalo = 1
+                if diagnostico is not None:
+                    linhas = ([] if registrado else diagnostico) + [
+                        datetime.now(timezone.utc).isoformat() + f' PresencaRecuperada falhas={falhas}']
+                    try:
+                        self._gravar_diagnostico(linhas)
+                    except OSError:
+                        # A presença voltou; conserva o diagnóstico até o log aceitar gravação.
+                        continue
+                    diagnostico = None
+                    registrado = False
+                    falhas = 0
 
     def publicar(self, servidor: HTTPServer, encerrar: Callable[[], None],
                  situacao: Callable[[], Registro] | None = None) -> None:
@@ -273,16 +303,23 @@ class IntegracaoLocal:
         except Exception as erro:
             self.registrar_falha(erro, fatal=False)
 
-    def registrar_falha(self, erro: BaseException, *, fatal: bool = True) -> None:
-        pasta_log = self.pasta / 'logs'
-        pasta_log.mkdir(exist_ok=True)
+    @staticmethod
+    def _diagnostico_falha(erro: BaseException) -> list[str]:
         linhas = [datetime.now(timezone.utc).isoformat() + ' ' + type(erro).__name__]
         # Tipo e localização são suficientes para rastrear a falha sem copiar a mensagem,
         # variáveis locais, linhas de código, credenciais ou dados de negócio para o hub.
         linhas.extend(f'{Path(quadro.filename).name}:{quadro.lineno} {quadro.name}'
                       for quadro in traceback.extract_tb(erro.__traceback__))
+        return linhas
+
+    def _gravar_diagnostico(self, linhas: list[str]) -> None:
+        pasta_log = self.pasta / 'logs'
+        pasta_log.mkdir(exist_ok=True)
         with (pasta_log / (texto(self.registro['id']) + '.log')).open('a', encoding='utf-8') as arquivo:
             _ = arquivo.write('\n'.join(linhas) + '\n')
+
+    def registrar_falha(self, erro: BaseException, *, fatal: bool = True) -> None:
+        self._gravar_diagnostico(self._diagnostico_falha(erro))
         if fatal:
             with self.mutex:
                 self.registro.update(estado='erro', erro=type(erro).__name__)
