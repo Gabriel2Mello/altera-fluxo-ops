@@ -8,6 +8,7 @@ from collections.abc import Callable
 import ctypes
 from ctypes import wintypes
 from datetime import datetime, timezone
+from http.client import HTTPException
 import errno
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
@@ -154,8 +155,11 @@ def _pedido(registro: Registro, encerrar: bool = False, *, cancelar_abertura: bo
                      headers={'X-Nunes-Instancia': texto(registro.get('token')), 'Content-Type': 'application/json'},
                      method='POST' if parada else 'GET')
     # O tráfego de controle local nunca utiliza proxy configurado na estação.
-    with build_opener(ProxyHandler({})).open(pedido, timeout=.6) as resposta:
-        dados: object = json.loads(resposta.read(8192))
+    try:
+        with build_opener(ProxyHandler({})).open(pedido, timeout=.6) as resposta:
+            dados: object = json.loads(resposta.read(8192))
+    except HTTPException as erro:
+        raise ValueError('Resposta HTTP local inválida ou incompleta.') from erro
     if not isinstance(dados, dict):
         raise ValueError('Resposta inválida.')
     resultado = cast(Registro, dados)
