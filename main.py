@@ -3,6 +3,7 @@ import argparse
 import json
 from pathlib import Path
 from time import perf_counter
+from sincronizar_estatisticas import Sincronizador
 
 from src.banco import BancoFluxo
 from src.diario import DiarioFluxo
@@ -27,6 +28,13 @@ def main(argv=None):
     grupo.add_argument('--conferir', action='store_true', help='Conferir incertezas no banco, sem repetir ações na interface')
     grupo.add_argument('--novo-lote', action='store_true', help='Nova solicitação explícita, incluindo OPs concluídas/ignoradas; incertezas permanecem bloqueadas')
     args = parser.parse_args(argv)
+    if args.historico:
+        return executar_solicitacao(args)
+    with Sincronizador(aplicacao='alteracao-fluxo'):
+        return executar_solicitacao(args)
+
+
+def executar_solicitacao(args):
     inicio = perf_counter()
     try:
         diario = DiarioFluxo()

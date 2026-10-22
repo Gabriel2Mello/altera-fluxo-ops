@@ -37,6 +37,7 @@ class CursorFake:
 
 class TestRecuperacao(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch('sincronizar_estatisticas.ler_configuracao', return_value=None))
         pasta = self.enterContext(TemporaryDirectory())
         self.caminho = Path(pasta) / 'execucoes.sqlite3'
         self.diario = DiarioFluxo(self.caminho)
