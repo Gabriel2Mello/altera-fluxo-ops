@@ -13,7 +13,7 @@ FUSO = timezone(timedelta(hours=-3))
 APLICACOES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     'find-move-nfe': (('arquivo_transferido',), ('busca_pdf', 'busca_xml', 'move_pdf', 'move_xml')),
     'cofre-nfe': (('documento_baixado',), ('nfe', 'cte')),
-    'financeiro': (('duplicata_consultada',), ('conferencia', 'relatorio')),
+    'financeiro': (('duplicata_consultada', 'registro_consultado'), ('conferencia', 'relatorio', 'havan', 'sisplan')),
     'pedidos-havan': (('pedido_inserido', 'pedido_existente', 'pedido_falhou'),
                       ('pedido_inserido', 'pedido_existente', 'pedido_falhou')),
     'impressao-ops': (('op_enviada',), ('op_enviada',)),
@@ -61,9 +61,13 @@ def validar_evento(bruto: object) -> dict[str, str]:
                  and bruto['empresa'] in ('MATRIZ', 'FILIAL')
                  and 1 <= len(bruto['referencia']) <= 512)
     consulta = (bruto['evento'] == 'duplicata_consultada'
-                and bruto['tipo'] in APLICACOES['financeiro'][1]
+                and bruto['tipo'] in ('conferencia', 'relatorio')
                 and bruto['empresa'] in ('_001', '_002')
                 and 1 <= len(bruto['referencia']) <= 512)
+    registro_consultado = (bruto['evento'] == 'registro_consultado'
+                          and bruto['tipo'] in ('havan', 'sisplan')
+                          and bruto['empresa'] in ('', '_001', '_002')
+                          and 1 <= len(bruto['referencia']) <= 512)
     pedido = (bruto['evento'] in APLICACOES['pedidos-havan'][0]
               and bruto['empresa'] in (('MATRIZ', 'FILIAL') if bruto['evento'] == 'pedido_inserido'
                                        else ('', 'MATRIZ', 'FILIAL'))
@@ -78,7 +82,7 @@ def validar_evento(bruto: object) -> dict[str, str]:
              and bruto['tipo'].startswith('Parte ') and len(bruto['tipo']) == 8
              and bruto['tipo'][6:].isascii() and bruto['tipo'][6:].isdigit())
     if (len(bruto['id']) != 64 or any(c not in '0123456789abcdef' for c in bruto['id'])
-            or not (arquivo or documento or consulta or pedido or impressao or fluxo)
+            or not (arquivo or documento or consulta or registro_consultado or pedido or impressao or fluxo)
             or not impressao and bruto['setor']):
         raise ValueError('Evento fora do escopo do piloto.')
     if not bruto['execucao'].strip() or len(bruto['execucao']) > 128:

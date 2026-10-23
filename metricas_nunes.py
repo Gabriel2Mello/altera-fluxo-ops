@@ -26,9 +26,10 @@ EVENTOS = {
     'pedido_inserido': ('pedidos-havan', 'Pedidos inseridos'),
     'pedido_existente': ('pedidos-havan', 'Pedidos já existentes (por lote)'),
     'pedido_falhou': ('pedidos-havan', 'Pedidos com falha (por lote)'),
-    'op_enviada': ('impressao-ops', 'Envios de OP por setor'),
+    'op_enviada': ('impressao-ops', 'OPs impressas'),
     'documento_baixado': ('cofre-nfe', 'Documentos baixados'),
     'duplicata_consultada': ('financeiro', 'Duplicatas consultadas'),
+    'registro_consultado': ('financeiro', 'Registros consultados'),
     'arquivo_transferido': ('find-move-nfe', 'Arquivos buscados e movidos'),
     'fluxo_alterado': ('alteracao-fluxo', 'Alterações de fluxo confirmadas'),
 }
@@ -258,12 +259,24 @@ def _condicao(filtros: dict[str, str], inicio: str, fim: str) -> tuple[str, list
     return ' AND '.join(clausulas), valores
 
 
+_OPS_ORDENADAS = """WITH ops_ordenadas AS (
+    SELECT *, row_number() OVER (PARTITION BY referencia ORDER BY
+        substr(ocorrido_em,1,19),
+        CASE WHEN substr(ocorrido_em,20,1)='.' THEN substr(ocorrido_em,21,6) ELSE '000000' END,
+        id) AS ordem
+    FROM eventos WHERE evento='op_enviada') """
+
+
 def _totais(conexao: sqlite3.Connection, condicao: str, valores: list[str]) -> dict[str, int]:
     totais = dict.fromkeys(EVENTOS, 0)
     for linha in conexao.execute('SELECT evento, count(*) AS total FROM eventos WHERE ' + condicao + ' GROUP BY evento', valores):
         totais[linha['evento']] = linha['total']
     totais['ops_distintas'] = conexao.execute(
         "SELECT count(DISTINCT referencia) FROM eventos WHERE evento='op_enviada' AND " + condicao, valores).fetchone()[0]
+    # A primeira ocorrência é procurada em todo o histórico, antes dos filtros:
+    # reimprimir em outro setor ou período continua sendo uma repetição.
+    totais['ops_repetidas'] = conexao.execute(
+        _OPS_ORDENADAS + 'SELECT count(*) FROM ops_ordenadas WHERE ordem>1 AND ' + condicao, valores).fetchone()[0]
     return totais
 
 
@@ -281,6 +294,8 @@ def _evolucao(conexao: sqlite3.Connection, filtros: dict[str, str], fim: date,
         'SELECT substr(dia,1,7) AS mes, evento, count(*) AS total FROM eventos WHERE ' + condicao +
         ' GROUP BY mes, evento', valores)}
     meses: list[dict[str, object]] = []
+    primeiro_consultas = conexao.execute(
+        "SELECT min(dia) FROM eventos WHERE evento='registro_consultado'").fetchone()[0]
     for deslocamento in range(7):
         primeiro = _mes_deslocado(inicio, deslocamento)
         ultimo_calendario = primeiro.replace(day=monthrange(primeiro.year, primeiro.month)[1])
@@ -289,7 +304,7 @@ def _evolucao(conexao: sqlite3.Connection, filtros: dict[str, str], fim: date,
                      else 'parcial' if primeiro.isoformat() < primeiro_registro else 'disponivel')
         coberturas = {}
         for evento, (app, _) in EVENTOS.items():
-            inicio_coleta = primeiros[app]
+            inicio_coleta = primeiro_consultas if evento == 'registro_consultado' else primeiros[app]
             coberturas[evento] = ('sem_coleta' if not inicio_coleta or ultimo.isoformat() < inicio_coleta
                                  else 'parcial' if primeiro.isoformat() < inicio_coleta else 'disponivel')
         mes = primeiro.isoformat()[:7]
@@ -348,7 +363,20 @@ def consultar_metricas(parametros: dict[str, str], *, pasta: Path | None = None,
                         if atual is None or linha['primeiro'] < atual:
                             primeiros[app] = linha['primeiro']
                 resultado['primeiro_por_aplicacao'] = primeiros
+                resultado['primeiro_por_evento'] = {l['evento']: l['primeiro'] for l in conexao.execute(
+                    'SELECT evento, min(dia) AS primeiro FROM eventos GROUP BY evento')}
                 resultado['evolucao'] = _evolucao(conexao, filtros, min(ultimo, datetime.now(FUSO).date()), primeiro_registro, primeiros)
+                # Agregações do mesmo snapshot, independentes da página de histórico.
+                resultado['diario'] = [dict(l) for l in conexao.execute(
+                    'SELECT dia, evento, tipo, count(*) AS total FROM eventos WHERE ' + condicao +
+                    ' GROUP BY dia, evento, tipo ORDER BY dia, evento, tipo', valores)]
+                resultado['tipos'] = [dict(l) for l in conexao.execute(
+                    'SELECT evento, tipo, count(*) AS total FROM eventos WHERE ' + condicao +
+                    ' GROUP BY evento, tipo ORDER BY evento, tipo', valores)]
+                resultado['ops_diarias'] = [dict(l) for l in conexao.execute(
+                    _OPS_ORDENADAS + 'SELECT dia, count(DISTINCT referencia) AS total, '
+                    'sum(CASE WHEN ordem>1 THEN 1 ELSE 0 END) AS reimpressas FROM ops_ordenadas WHERE ' +
+                    condicao + ' GROUP BY dia ORDER BY dia', valores)]
             return resultado
     except (OSError, sqlite3.Error) as erro:
         raise RuntimeError('Não foi possível consultar as métricas. Confira a pasta de dados; os totais estão indisponíveis.') from erro
