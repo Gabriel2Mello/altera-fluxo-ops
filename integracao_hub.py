@@ -5,7 +5,7 @@ Somente biblioteca padrão. Não controla telas, credenciais ou operações de n
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import ctypes
 from ctypes import wintypes
 from datetime import datetime, timezone
@@ -92,6 +92,9 @@ class MedidorAbertura:
             linha['duracao_ms'] = round((agora - desde) * 1000, 3)
         if erro is not None:
             linha['erro'] = type(erro).__name__
+            # Nunca registrar mensagem, linha de código ou variáveis locais.
+            linha['locais'] = [f'{Path(quadro.filename).name}:{quadro.lineno} {quadro.name}'
+                               for quadro in traceback.extract_tb(erro.__traceback__)]
         try:
             with _TRAVA_LOG_ABERTURA:
                 try:
@@ -497,9 +500,15 @@ def executar_interface(identificador: str, nome: str, sisplan: bool,
     silencioso = '--nunes-sem-navegador' in sys.argv
     if silencioso:
         sys.argv.remove('--nunes-sem-navegador')
-    integracao = IntegracaoLocal(identificador, nome, sisplan, sem_navegador=silencioso)
+    medidor = MedidorAbertura(identificador)
     try:
-        with integracao:
+        with ExitStack() as recursos:
+            # A entrada pode falhar antes de principal e do diagnóstico do painel.
+            # Fechar o arquivo antes de executar a aplicação evita mantê-lo aberto.
+            with medidor:
+                with medidor.etapa('integracao_local'):
+                    integracao = recursos.enter_context(IntegracaoLocal(
+                        identificador, nome, sisplan, sem_navegador=silencioso))
             codigo = principal(integracao)
             if codigo:
                 integracao.registro['estado'] = 'erro'
@@ -507,9 +516,11 @@ def executar_interface(identificador: str, nome: str, sisplan: bool,
     except ConflitoAplicacao as erro:
         atual = consultar_instancia(erro.registro)
         if atual.get('respondendo') and not atual.get('encerrando'):
+            medidor.marcar('instancia_reutilizada')
             if not silencioso:
                 _ = webbrowser.open(texto(erro.registro.get('url')), new=2)
             return 0
+        medidor.marcar('conflito_inicializacao')
         if not silencioso:
             informar(str(erro), nome)
         return 2
