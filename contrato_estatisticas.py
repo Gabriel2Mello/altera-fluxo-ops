@@ -2,7 +2,7 @@
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 import json
-from typing import TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 from urllib.parse import parse_qs, urlsplit
 
 VERSAO = 1
@@ -26,6 +26,7 @@ class ConfiguracaoCliente(TypedDict):
     url: str
     central_id: str
     token: str
+    certificado_ca: NotRequired[str]
 
 
 def aplicacao_da_consulta(query: str) -> str:
@@ -109,7 +110,7 @@ def validar_cliente(dados: object) -> ConfiguracaoCliente:
     if not isinstance(dados, dict):
         raise ValueError('Configuração da central inválida.')
     dados = cast(dict[str, object], dados)
-    if set(dados) != {'protocolo', 'url', 'central_id', 'token'}:
+    if set(dados) - {'certificado_ca'} != {'protocolo', 'url', 'central_id', 'token'}:
         raise ValueError('Configuração da central inválida.')
     if type(dados['protocolo']) is not int or dados['protocolo'] != VERSAO:
         raise ValueError('Protocolo incompatível.')
@@ -121,8 +122,20 @@ def validar_cliente(dados: object) -> ConfiguracaoCliente:
     if not isinstance(dados['url'], str):
         raise ValueError('Endereço da central inválido.')
     url = urlsplit(dados['url'])
-    if (url.scheme != 'http' or url.hostname != '127.0.0.1' or url.port is None
+    host = url.hostname or ''
+    rotulos = host.split('.')
+    host_valido = (host.isascii() and len(host) <= 253 and all(
+        1 <= len(rotulo) <= 63 and rotulo[0].isalnum() and rotulo[-1].isalnum()
+        and all(c.isalnum() or c == '-' for c in rotulo) for rotulo in rotulos))
+    if (url.scheme not in ('http', 'https') or not host_valido or url.port is None
             or not 1 <= url.port <= 65535 or url.username is not None or url.password is not None
-            or url.path or url.query or url.fragment or dados['url'] != f'http://127.0.0.1:{url.port}'):
-        raise ValueError('Este piloto aceita somente HTTP em 127.0.0.1 com porta explícita.')
+            or url.path or url.query or url.fragment
+            or dados['url'] != f'{url.scheme}://{host}:{url.port}'
+            or url.scheme == 'http' and host != '127.0.0.1'):
+        raise ValueError('Use HTTPS com host e porta explícitos, ou HTTP somente em 127.0.0.1.')
+    if 'certificado_ca' in dados:
+        certificado_ca = dados['certificado_ca']
+        if (url.scheme != 'https' or not isinstance(certificado_ca, str)
+                or not certificado_ca.strip() or any(c in certificado_ca for c in '\r\n\x00')):
+            raise ValueError('Certificado de confiança inválido; permitido somente com HTTPS.')
     return cast(ConfiguracaoCliente, dict(dados))

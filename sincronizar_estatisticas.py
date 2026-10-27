@@ -8,12 +8,13 @@ import logging
 import os
 from pathlib import Path
 import sqlite3
+import ssl
 from threading import Event, Thread
 from types import TracebackType
 from typing import IO, cast
 from email.message import Message
 from urllib.error import HTTPError
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 from contrato_estatisticas import (
     APLICACOES, CAMPOS, LIMITE_CORPO, LIMITE_LOTE, VERSAO, ConfiguracaoCliente, assinatura, caminho_resumo,
@@ -36,7 +37,10 @@ def ler_configuracao(arquivo: Path | None = None) -> ConfiguracaoCliente | None:
     caminho = Path(arquivo or os.environ.get('NUNES_CENTRAL_CONFIG') or
                    Path(__file__).resolve().parent / '.local' / 'central.json')
     try:
-        return validar_cliente(json.loads(caminho.read_text(encoding='utf-8')))
+        config = validar_cliente(json.loads(caminho.read_text(encoding='utf-8')))
+        if 'certificado_ca' in config:
+            config['certificado_ca'] = str((caminho.resolve().parent / config['certificado_ca']).resolve())
+        return config
     except FileNotFoundError:
         if not explicita:
             return None
@@ -52,8 +56,13 @@ def requisitar(config: ConfiguracaoCliente, caminho: str, dados: object = None) 
         'Authorization': 'Bearer ' + config['token'], 'Content-Type': 'application/json',
     })
     # Não entrega tokens a proxies do usuário ou destinos de redirecionamentos.
+    contexto = None
+    if config['url'].startswith('https://'):
+        contexto = ssl.create_default_context(cafile=config.get('certificado_ca'))
+        contexto.minimum_version = ssl.TLSVersion.TLSv1_2
     try:
-        resposta = build_opener(ProxyHandler({}), SemRedirecionamento()).open(pedido, timeout=1)
+        resposta = build_opener(ProxyHandler({}), SemRedirecionamento(),
+                               HTTPSHandler(context=contexto)).open(pedido, timeout=1)
     except HTTPError as erro:
         erro.close()
         raise
@@ -206,7 +215,7 @@ class Sincronizador:
             resultado = self.cliente.sincronizar()
         except FALHAS:
             if self.ultimo != 'pendente':
-                self.relatar('Estatísticas aguardando a central local. Não repita a operação de negócio.')
+                self.relatar('Estatísticas aguardando a central. Não repita a operação de negócio.')
                 logger.warning('Sincronização pendente; dados locais não foram removidos.')
             self.ultimo = 'pendente'
         else:
