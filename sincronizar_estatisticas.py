@@ -163,6 +163,9 @@ class Cliente:
 
     def sincronizar(self) -> dict[str, int]:
         pendentes = self.pendentes()
+        if not pendentes:
+            # O resultado descreve este snapshot; novidades entram no próximo ciclo.
+            return {'confirmados_neste_ciclo': 0, 'pendentes': 0}
         quantidade = 0
         # Limita cada ciclo; lotes maiores continuam no próximo ciclo/abertura.
         for inicio in range(0, min(len(pendentes), LIMITE_LOTE * 10), LIMITE_LOTE):
@@ -208,26 +211,32 @@ class Sincronizador:
             self.relatar('Sincronização indisponível: confira a configuração da central. Métricas locais preservadas.')
         return self
 
-    def _ciclo(self) -> None:
+    def _ciclo(self) -> bool:
+        """True apenas quando uma leitura válida não encontrou atividade/pendências."""
         if self.cliente is None:
-            return
+            return False
         try:
             resultado = self.cliente.sincronizar()
         except FALHAS:
             if self.ultimo != 'pendente':
-                self.relatar('Estatísticas aguardando a central. Não repita a operação de negócio.')
                 logger.warning('Sincronização pendente; dados locais não foram removidos.')
             self.ultimo = 'pendente'
         else:
             if resultado['confirmados_neste_ciclo']:
                 self.relatar(f"Estatísticas: {resultado['confirmados_neste_ciclo']} evento(s) confirmado(s) pela central.")
             self.ultimo = 'ok'
+            return not resultado['confirmados_neste_ciclo'] and not resultado['pendentes']
+        return False
 
     def _executar(self) -> None:
         self.ultimo = None
-        self._ciclo()
-        while not self.parar.wait(self.intervalo):
-            self._ciclo()
+        intervalo = self.intervalo
+        while True:
+            ocioso = self._ciclo()
+            # Só ociosidade aumenta a espera; falha/atividade retomam a cadência base.
+            intervalo = min(intervalo * 2, max(self.intervalo, 30)) if ocioso else self.intervalo
+            if self.parar.wait(intervalo):
+                break
         self._ciclo()
 
     def __exit__(self, tipo: type[BaseException] | None, valor: BaseException | None,

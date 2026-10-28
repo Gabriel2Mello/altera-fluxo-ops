@@ -200,8 +200,10 @@ sobrescrito. Reinicie a central atualizada e reabra o Hub. O Fluxo carrega
 o cliente na próxima execução de console. Não recrie bases ou identidades.
 Sem vínculo, o comportamento anterior é preservado e não há envios à central.
 
-O sincronizador tenta na abertura, a cada cinco segundos e ao encerrar,
-aguardando até 2,5 segundos no fechamento. Sem confirmação válida, mantém
+O sincronizador tenta na abertura e ao encerrar, aguardando até 2,5 segundos no
+fechamento. A espera entre ciclos é de cinco segundos, subindo gradualmente até
+30 segundos somente sem atividade nem pendências; atividade ou falha retomam
+cinco segundos. Sem confirmação válida, mantém
 pendências para outra execução. Confirmações ficam em
 `sincronizacao-alteracao-fluxo.sqlite3` na pasta das métricas, vinculadas à
 identidade da central e à assinatura do evento. Os registros locais permanecem.
