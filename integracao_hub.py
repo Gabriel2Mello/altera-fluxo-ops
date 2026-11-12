@@ -207,6 +207,10 @@ class ConflitoAplicacao(RuntimeError):
         self.registro: Registro = registro or {}
 
 
+class SisplanOcupado(ConflitoAplicacao):
+    pass
+
+
 class TravaLocal:
     def __init__(self, caminho: Path):
         self.arquivo = caminho.open('a+b')
@@ -283,7 +287,8 @@ def solicitar_cancelamento_abertura(registro: Registro) -> None:
 
 class IntegracaoLocal:
     def __init__(self, identificador: str, nome: str, sisplan: bool,
-                 pasta: Path | None = None, *, sem_navegador: bool = False):
+                 pasta: Path | None = None, *, sem_navegador: bool = False,
+                 sisplan_por_operacao: bool = False):
         if not identificador or any(letra not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for letra in identificador):
             raise ValueError('Identificador de aplicação inválido.')
         self.pasta = (pasta or dados_compartilhados()).resolve()
@@ -293,6 +298,8 @@ class IntegracaoLocal:
                                   'instancia': uuid.uuid4().hex, 'token': secrets.token_urlsafe(32),
                                   'pid': os.getpid(), 'url': '', 'estado': 'iniciando', 'paginas': 0,
                                   'iniciado': time.time(), 'abertura': os.environ.get('NUNES_HUB_ABERTURA', '')}
+        if sisplan and sisplan_por_operacao:
+            self.registro['sisplan_por_operacao'] = True
         self.sem_navegador = sem_navegador
         self.travas: list[TravaLocal] = []
         self.mutex = Lock()
@@ -308,14 +315,8 @@ class IntegracaoLocal:
                 self.travas.append(TravaLocal(self.caminho.with_suffix('.lock')))
             except ConflitoAplicacao as erro:
                 raise ConflitoAplicacao(f'{self.registro["nome"]} já está aberta ou encerrando.', ler_registro(self.caminho)) from erro
-            if self.registro['sisplan']:
-                try:
-                    self.travas.append(TravaLocal(self.pasta / 'sisplan.lock'))
-                except ConflitoAplicacao as erro:
-                    dono = ler_registro(self.pasta / 'sisplan.json')
-                    nome = texto(dono.get('nome')) or 'outra automação'
-                    raise ConflitoAplicacao(f'Encerre {nome} antes de abrir outra ferramenta do Sisplan.') from erro
-                gravar_registro(self.pasta / 'sisplan.json', self.registro)
+            if self.registro['sisplan'] and not self.registro.get('sisplan_por_operacao'):
+                self.travas.append(self.reservar_sisplan())
             self.atualizar()
             self.thread = Thread(target=self._presenca, daemon=True, name='nunes-registro')
             self.thread.start()
@@ -325,6 +326,27 @@ class IntegracaoLocal:
                 trava.fechar()
             self.travas.clear()
             raise
+
+    def reservar_sisplan(self) -> TravaLocal:
+        """Quem inicia a operação deve fechar a reserva após o último efeito."""
+        caminho = self.pasta / 'sisplan.json'
+        try:
+            trava = TravaLocal(self.pasta / 'sisplan.lock')
+        except ConflitoAplicacao as erro:
+            dono = ler_registro(caminho)
+            nome = texto(dono.get('nome')) or 'outra automação'
+            if dono.get('sisplan_por_operacao'):
+                mensagem = f'Aguarde {nome} concluir a operação para usar o Sisplan.'
+            else:
+                mensagem = f'Encerre {nome} para liberar o Sisplan.'
+            raise SisplanOcupado(mensagem) from erro
+        try:
+            with self.mutex:
+                gravar_registro(caminho, self.registro)
+        except BaseException:
+            trava.fechar()
+            raise
+        return trava
 
     def atualizar(self) -> None:
         situacao = self.situacao()
