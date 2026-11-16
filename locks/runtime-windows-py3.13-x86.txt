@@ -1,0 +1,12 @@
+# Gerado por scripts/dependencias.py do nunes-hub; não editar manualmente.
+# CPython 3.13.13 / Windows 32 bits
+# Raízes: requirements.txt; fechamento transitivo do perfil.
+# Instalar com --no-deps; usar somente neste runtime/arquitetura.
+asn1crypto==1.5.1
+comtypes==1.4.17
+pg8000==1.31.5
+python-dateutil==2.9.0.post0
+pywin32==312
+pywinauto==0.6.9
+scramp==1.4.17
+six==1.17.0

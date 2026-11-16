@@ -1,5 +1,7 @@
 # Atualiza Fluxo · Nunes
 
+Para recriar o ambiente de uma instalação ou build, use o perfil indicado em [Dependências reproduzíveis](DEPENDENCIAS.md).
+
 Console local que consulta OPs do arquivo `ordem_producao.txt` e executa a
 sequência existente de alteração de fluxo no Sisplan da empresa **002**, tela
 `FacMov3`, parte **00**. Os códigos de fluxo 70, 19 e 49 continuam ignorados.
