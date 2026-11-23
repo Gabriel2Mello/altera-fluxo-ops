@@ -134,6 +134,13 @@ def inteiro(valor: object) -> int:
     return valor if isinstance(valor, int) and not isinstance(valor, bool) else 0
 
 
+def instancia_portal(registro: Registro) -> bool:
+    modo = registro.get('modo_instancia')
+    # As versões anteriores desses dois executores já publicavam a reserva por operação.
+    return modo == 'portal' or (modo is None and registro.get('id') in ('financeiro', 'impressao-ops')
+                                and registro.get('sisplan_por_operacao') is True)
+
+
 def dados_compartilhados() -> Path:
     configurado = os.environ.get('NUNES_HUB_DADOS')
     if configurado:
@@ -236,6 +243,26 @@ class TravaLocal:
         self.arquivo.close()
 
 
+class ReservaSisplan(TravaLocal):
+    def __init__(self, integracao: IntegracaoLocal):
+        super().__init__(integracao.pasta / 'sisplan.lock')
+        self.integracao = integracao
+
+    def fechar(self) -> None:
+        integracao = self.integracao
+        with integracao.mutex:
+            if self.arquivo.closed:
+                return
+            try:
+                if integracao.registro.pop('sisplan_reservado', False) and not integracao.terminada:
+                    gravar_registro(integracao.caminho, integracao.registro)
+            except OSError:
+                # O próximo ciclo de presença republica o registro sem a reserva.
+                pass
+            finally:
+                super().fechar()
+
+
 def trava_ocupada(caminho: Path) -> bool:
     try:
         trava = TravaLocal(caminho)
@@ -288,7 +315,7 @@ def solicitar_cancelamento_abertura(registro: Registro) -> None:
 class IntegracaoLocal:
     def __init__(self, identificador: str, nome: str, sisplan: bool,
                  pasta: Path | None = None, *, sem_navegador: bool = False,
-                 sisplan_por_operacao: bool = False):
+                 sisplan_por_operacao: bool = False, portal: bool = False):
         if not identificador or any(letra not in 'abcdefghijklmnopqrstuvwxyz0123456789-' for letra in identificador):
             raise ValueError('Identificador de aplicação inválido.')
         self.pasta = (pasta or dados_compartilhados()).resolve()
@@ -300,6 +327,8 @@ class IntegracaoLocal:
                                   'iniciado': time.time(), 'abertura': os.environ.get('NUNES_HUB_ABERTURA', '')}
         if sisplan and sisplan_por_operacao:
             self.registro['sisplan_por_operacao'] = True
+        if portal:
+            self.registro['modo_instancia'] = 'portal'
         self.sem_navegador = sem_navegador
         self.travas: list[TravaLocal] = []
         self.mutex = Lock()
@@ -330,8 +359,9 @@ class IntegracaoLocal:
     def reservar_sisplan(self) -> TravaLocal:
         """Quem inicia a operação deve fechar a reserva após o último efeito."""
         caminho = self.pasta / 'sisplan.json'
+        por_operacao = self.registro.get('sisplan_por_operacao') is True
         try:
-            trava = TravaLocal(self.pasta / 'sisplan.lock')
+            trava = ReservaSisplan(self) if por_operacao else TravaLocal(self.pasta / 'sisplan.lock')
         except ConflitoAplicacao as erro:
             dono = ler_registro(caminho)
             nome = texto(dono.get('nome')) or 'outra automação'
@@ -342,7 +372,16 @@ class IntegracaoLocal:
             raise SisplanOcupado(mensagem) from erro
         try:
             with self.mutex:
-                gravar_registro(caminho, self.registro)
+                if por_operacao:
+                    self.registro['sisplan_reservado'] = True
+                    try:
+                        gravar_registro(caminho, self.registro)
+                        gravar_registro(self.caminho, self.registro)
+                    except OSError:
+                        # A presença republica o estado. A reserva já está garantida pela trava.
+                        pass
+                else:
+                    gravar_registro(caminho, self.registro)
         except BaseException:
             trava.fechar()
             raise
